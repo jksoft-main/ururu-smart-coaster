@@ -11,12 +11,13 @@
 #include <vector>
 
 // --- 定数定義 ---
-#define ENEBULAR_ENDPOINT "https://ev2-prod-node-red-a4d0ce4a-7ff.herokuapp.com/api"
+#define ENEBULAR_ENDPOINT "クラウド実行環境のURLを設定"
 const char* AP_SSID = "Komame-Setup";
 const float EMPTY_WEIGHT_THRESHOLD = 15.0f; // コップ有無判定の閾値（g）
 const unsigned long WEIGHT_SAMPLE_INTERVAL = 200; // 重量サンプリング間隔 (ms)
 const unsigned long ENV_SAMPLE_INTERVAL = 5000;    // 環境データサンプリング間隔 (ms)
-const unsigned long HTTP_POST_INTERVAL = 30000;    // HTTPS POST送信周期 (ms)
+const unsigned long HTTP_POST_INTERVAL = 600000;    // HTTPS POST送信周期 (10分 = 600000ms)
+const unsigned long BUFFER_RECORD_INTERVAL = 300000; // センサーデータ記録周期 (5分 = 300000ms)
 
 // --- デバイスステート定義 ---
 enum DeviceState {
@@ -29,6 +30,19 @@ DeviceState currentState = STATE_EMPTY;
 float stableWeight = 0.0f;
 float weightBeforeLift = 0.0f;
 float consumedMl = 0.0f;
+
+// センサーバッファ定義
+struct SensorRecord {
+    unsigned long timestampMs;
+    float weight;
+    float consumed;
+    float temp;
+    float humi;
+    float press;
+};
+std::vector<SensorRecord> recordBuffer;
+float sampleConsumedMl = 0.0f; // 1つのバッファ記録期間内の補給量蓄積
+unsigned long lastBufferRecordTime = 0;
 
 // 安定判定用バッファ
 float lastSamples[5] = {0.0f};
@@ -150,6 +164,7 @@ void startApMode();
 bool connectWifi();
 void handleWeightUpdate();
 void handleEnvUpdate();
+void recordToBuffer();
 void sendDataToEnebular();
 void setMiniscaleLED(uint32_t color, unsigned long durationMs = 0);
 void setAvatarExpression(Expression expr, unsigned long durationMs = 0);
@@ -355,6 +370,7 @@ void handleWeightUpdate() {
                         // 水分補給が行われた
                         float consumed = weightBeforeLift - stableWeight;
                         consumedMl += consumed;
+                        sampleConsumedMl += consumed;
                         Serial.printf("補給検知(持ち上げ): %.1f ml (累計: %.1f ml)\n", consumed, consumedMl);
                         
                         setAvatarExpression(Expression::Happy, 5000);
@@ -394,6 +410,7 @@ void handleWeightUpdate() {
                 if (currentStableWeight < stableWeight - 5.0f) {
                     float consumed = stableWeight - currentStableWeight;
                     consumedMl += consumed;
+                    sampleConsumedMl += consumed;
                     Serial.printf("補給検知(ストロー): %.1f ml (累計: %.1f ml)\n", consumed, consumedMl);
                     
                     stableWeight = currentStableWeight;
@@ -424,6 +441,7 @@ void handleWeightUpdate() {
                     if (stableWeight < weightBeforeLift - 5.0f) {
                         float consumed = weightBeforeLift - stableWeight;
                         consumedMl += consumed;
+                        sampleConsumedMl += consumed;
                         Serial.printf("補給検知(持ち上げ帰還): %.1f ml (累計: %.1f ml)\n", consumed, consumedMl);
                         
                         setAvatarExpression(Expression::Happy, 5000);
@@ -488,8 +506,35 @@ void handleEnvUpdate() {
     }
 }
 
+// --- センサーデータをバッファに保存 ---
+void recordToBuffer() {
+    SensorRecord rec;
+    rec.timestampMs = millis();
+    rec.weight = scales.getWeight();
+    if (rec.weight < 0.0f) rec.weight = 0.0f;
+    rec.temp = currentTemp;
+    rec.humi = currentHumi;
+    rec.press = currentPress;
+    rec.consumed = sampleConsumedMl;
+    sampleConsumedMl = 0.0f; // バッファ記録期間内の補給量をリセット
+    
+    recordBuffer.push_back(rec);
+    Serial.printf("[Buffer] Recorded. Weight: %.1f g, Consumed: %.1f ml, Temp: %.1f C, Humi: %.1f %%, Press: %.1f hPa. Buffer size: %d\n",
+                  rec.weight, rec.consumed, rec.temp, rec.humi, rec.press, (int)recordBuffer.size());
+                  
+    // メモリ保護のため、バッファが大きくなりすぎた場合は古いレコードを削除 (50件 = 250分相当)
+    if (recordBuffer.size() > 50) {
+        recordBuffer.erase(recordBuffer.begin());
+    }
+}
+
 // --- enebular へのデータ送信 ---
 void sendDataToEnebular() {
+    if (recordBuffer.empty()) {
+        Serial.println("Skipping HTTPS POST: Buffer is empty.");
+        return;
+    }
+    
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("Skipping HTTPS POST: Wi-Fi disconnected.");
         return;
@@ -506,23 +551,38 @@ void sendDataToEnebular() {
         http.addHeader("x-api-key", enebularApiKey);
     }
     
-    float currentWeight = scales.getWeight();
-    if (currentWeight < 0.0f) {
-        currentWeight = 0.0f;
+    // JSON 配列ペイロード構築
+    String jsonPayload = "[";
+    unsigned long currentMs = millis();
+    for (size_t i = 0; i < recordBuffer.size(); ++i) {
+        if (i > 0) {
+            jsonPayload += ",";
+        }
+        
+        // アップロード時点からの経過秒数 (相対オフセット) を算出
+        int offsetSec = 0;
+        if (currentMs >= recordBuffer[i].timestampMs) {
+            offsetSec = (currentMs - recordBuffer[i].timestampMs) / 1000;
+        }
+        
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "{\"weight_g\":%.1f,\"consumed_ml\":%.1f,\"temp_c\":%.1f,\"humi_pct\":%.1f,\"press_hpa\":%.1f,\"offset_sec\":%d}",
+                 recordBuffer[i].weight, recordBuffer[i].consumed, recordBuffer[i].temp, recordBuffer[i].humi, recordBuffer[i].press, offsetSec);
+        jsonPayload += buf;
     }
+    jsonPayload += "]";
     
-    // JSON ペイロード構築
-    char jsonPayload[256];
-    snprintf(jsonPayload, sizeof(jsonPayload),
-             "{\"weight_g\":%.1f,\"consumed_ml\":%.1f,\"temp_c\":%.1f,\"humi_pct\":%.1f,\"press_hpa\":%.1f}",
-             currentWeight, consumedMl, currentTemp, currentHumi, currentPress);
-             
-    Serial.print("Sending Payload: ");
+    Serial.print("Sending Payload (JSON Array): ");
     Serial.println(jsonPayload);
     
     int httpResponseCode = http.POST(jsonPayload);
     if (httpResponseCode > 0) {
         Serial.printf("HTTPS POST Success, Response Code: %d\n", httpResponseCode);
+        if (httpResponseCode == 200) {
+            recordBuffer.clear(); // 送信成功時にバッファをクリア
+            Serial.println("Buffer cleared.");
+        }
     } else {
         Serial.printf("HTTPS POST Failed, Error: %s\n", http.errorToString(httpResponseCode).c_str());
     }
@@ -611,6 +671,7 @@ void setup() {
     }
     
     lastWeightSampleTime = millis();
+    lastBufferRecordTime = millis();
 }
 
 // --- Loop ---
@@ -634,11 +695,13 @@ void loop() {
         Serial.println("Tare (zero calibration) requested via Button.");
         scales.setOffset();
         consumedMl = 0.0f; // 水分補給量リセット
+        sampleConsumedMl = 0.0f; // バッファ補給量リセット
         currentState = STATE_EMPTY;
         
         // バッファリセット
         sampleIndex = 0;
         bufferFilled = false;
+        recordBuffer.clear(); // バッファクリア
         
         setAvatarExpression(Expression::Happy, 3000);
         setAvatarSpeech("リセットしたよ！", 3000);
@@ -657,9 +720,18 @@ void loop() {
         handleEnvUpdate();
     }
     
+    // 3.5 センサーデータのバッファへの記録 (5分周期)
+    if (currentMillis - lastBufferRecordTime >= BUFFER_RECORD_INTERVAL) {
+        lastBufferRecordTime = currentMillis;
+        recordToBuffer();
+    }
+    
     // 4. 定期またはイベント検知時の enebular 送信
     if (triggerImmediatePost || (currentMillis - lastPostTime >= HTTP_POST_INTERVAL)) {
-        triggerImmediatePost = false;
+        if (triggerImmediatePost) {
+            recordToBuffer(); // イベント時点の最新状態をバッファに即時記録する
+            triggerImmediatePost = false;
+        }
         lastPostTime = currentMillis;
         sendDataToEnebular();
     }

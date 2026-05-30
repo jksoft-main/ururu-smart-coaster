@@ -1,0 +1,17 @@
+{
+  "name": "komame-coaster-backend",
+  "version": "1.0.0",
+  "description": "enebular ZIP deployment backend for Komame-chan Smart Coaster",
+  "main": "index.js",
+  "dependencies": {
+    "@uhuru/enebular-sdk": "^1.0.1"
+  },
+  "devDependencies": {
+    "adm-zip": "^0.5.12"
+  },
+  "scripts": {
+    "zip": "node zip.js"
+  },
+  "author": "",
+  "license": "ISC"
+}
