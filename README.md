@@ -9,14 +9,14 @@
 
 ```mermaid
 graph TD
-    Device[M5Atom S3 Coaster] -- センサーデータ (5分周期/補給時即時) --> Enebular[enebular / AWS Lambda Proxy]
-    Enebular -- 保存 --> Datastore[enebular Datastore / DynamoDB]
-    Enebular -- 最新環境データ取得 --> Gemini[Google Gemini 2.5 Flash]
-    Gemini -- AI会話・アドバイス生成 --> Enebular
-    Enebular -- LINE Push API --> LineUser[LINE ユーザー (Push通知)]
-    LineUser -- LINEメッセージ送信 (環境確認) --> LineWebhook[LINE Developers Webhook]
+    Device["M5Atom S3 Coaster"] -- "センサーデータ (5分周期/補給時即時)" --> Enebular["enebular / AWS Lambda Proxy"]
+    Enebular -- "保存" --> Datastore["enebular Datastore / DynamoDB"]
+    Enebular -- "最新環境データ取得" --> Gemini["Google Gemini 2.5 Flash"]
+    Gemini -- "AI会話・アドバイス生成" --> Enebular
+    Enebular -- "LINE Push API" --> LineUser["LINE ユーザー (Push通知)"]
+    LineUser -- "LINEメッセージ送信 (環境確認)" --> LineWebhook["LINE Developers Webhook"]
     LineWebhook --> Enebular
-    Enebular -- LINE Reply API --> LineUser
+    Enebular -- "LINE Reply API" --> LineUser
 ```
 
 ---
