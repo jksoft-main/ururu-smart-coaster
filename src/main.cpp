@@ -330,7 +330,7 @@ void handleWeightUpdate() {
     if (rawWeight < 0.0f) {
         rawWeight = 0.0f; // 風袋引き後の負値を防止
     }
-    Serial.printf("Raw ADC: %.1f, Weight: %.1f g\n", scales.getRawADC(), rawWeight);
+    // Serial.printf("Raw ADC: %.1f, Weight: %.1f g\n", scales.getRawADC(), rawWeight);
     
     // 安定度サンプリング
     lastSamples[sampleIndex] = rawWeight;
