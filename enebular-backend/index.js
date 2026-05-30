@@ -59,7 +59,7 @@ exports.handler = async (event) => {
         console.log(`Received message from user: "${userText}"`);
 
         // Check for inquiry keywords (environment, temperature, etc.) to trigger response
-        const keywords = ["環境", "状態", "部屋", "温度", "室温", "湿度", "気圧", "wbgt", "熱中症", "調子", "元気", "ステータス", "天気", "暑い", "寒い", "こmadaよ", "こまだよ", "こまめ"];
+        const keywords = ["環境", "状態", "部屋", "温度", "室温", "湿度", "気圧", "wbgt", "熱中症", "調子", "元気", "ステータス", "天気", "暑い", "寒い", "こまめ"];
         const matched = keywords.some(kw => userText.includes(kw));
 
         if (!matched) {
@@ -162,10 +162,10 @@ exports.handler = async (event) => {
           }
 
           if (!replyText) {
-            replyText = `こまだよ！今のお部屋は、気温: ${currentTemp.toFixed(1)}℃、湿度: ${currentHumi.toFixed(0)}%、気圧: ${currentPress.toFixed(1)}hPaだよ！水分補給をこまめにしようね！`;
+            replyText = `こまめだよ！今のお部屋は、気温: ${currentTemp.toFixed(1)}℃、湿度: ${currentHumi.toFixed(0)}%、気圧: ${currentPress.toFixed(1)}hPaだよ！水分補給をこまめにしようね！`;
           }
         } else {
-          replyText = "こまだよ！まだコースターのデータが見つからないみたい。電源が入っているか確認してね！";
+          replyText = "こまめだよ！まだコースターのデータが見つからないみたい。電源が入っているか確認してね！";
         }
 
         if (lineToken) {
@@ -572,9 +572,9 @@ exports.handler = async (event) => {
           }
 
           if (alerts.length > 0) {
-            formattedText = `こまだよ！\n` + alerts.join("\n");
+            formattedText = `こまめだよ！\n` + alerts.join("\n");
           } else {
-            formattedText = `こまだよ！水分補給をこまめにしようね！`;
+            formattedText = `こまめだよ！水分補給をこまめにしようね！`;
           }
         }
 
