@@ -11,7 +11,7 @@
 #include <vector>
 
 // --- 定数定義 ---
-#define ENEBULAR_ENDPOINT "https://ev2-prod-node-red-bbbf65fb-cff.herokuapp.com/api"
+#define ENEBULAR_ENDPOINT "https://ev2-prod-node-red-a4d0ce4a-7ff.herokuapp.com/api"
 const char* AP_SSID = "Komame-Setup";
 const float EMPTY_WEIGHT_THRESHOLD = 15.0f; // コップ有無判定の閾値（g）
 const unsigned long WEIGHT_SAMPLE_INTERVAL = 200; // 重量サンプリング間隔 (ms)
@@ -253,7 +253,7 @@ void startApMode() {
     server.begin();
     
     setAvatarExpression(Expression::Doubt);
-    setAvatarSpeech("WiFiせっていしてね");
+    setAvatarSpeech("Wi-Fi設定してね");
     Serial.println("AP Mode Started. SSID: " + String(AP_SSID));
     Serial.print("IP address: ");
     Serial.println(WiFi.softAPIP());
@@ -269,7 +269,7 @@ bool connectWifi() {
     Serial.println(wifiSsid);
     
     setAvatarExpression(Expression::Sleepy);
-    setAvatarSpeech("WiFi接続中...");
+    setAvatarSpeech("接続中...");
     
     WiFi.mode(WIFI_STA);
     WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
@@ -305,7 +305,7 @@ void setupAvatar() {
     face->setRightEye(new Eye(12, true));
     face->setMouth(new Mouth(50, 90, 6, 60));
     
-    avatar.setSpeechFont(&fonts::lgfxJapanGothic_12); // 日本語フォントを割り当て
+    avatar.setSpeechFont(&fonts::lgfxJapanGothicP_16); // プロポーショナル日本語フォント（16px）を割り当て
     avatar.init(); 
 }
 
@@ -315,6 +315,7 @@ void handleWeightUpdate() {
     if (rawWeight < 0.0f) {
         rawWeight = 0.0f; // 風袋引き後の負値を防止
     }
+    Serial.printf("Raw ADC: %.1f, Weight: %.1f g\n", scales.getRawADC(), rawWeight);
     
     // 安定度サンプリング
     lastSamples[sampleIndex] = rawWeight;
@@ -336,7 +337,7 @@ void handleWeightUpdate() {
         if (lastSamples[i] < minVal) minVal = lastSamples[i];
     }
     
-    bool isStable = (maxVal - minVal) <= 1.0f;
+    bool isStable = (maxVal - minVal) <= 2.5f; // ノイズ許容度を上げるため1.0gから2.5gに緩和
     float currentStableWeight = rawWeight;
     
     bool cupPresent = currentStableWeight > EMPTY_WEIGHT_THRESHOLD;
@@ -357,7 +358,7 @@ void handleWeightUpdate() {
                         Serial.printf("補給検知(持ち上げ): %.1f ml (累計: %.1f ml)\n", consumed, consumedMl);
                         
                         setAvatarExpression(Expression::Happy, 5000);
-                        setAvatarSpeech("ごくごく！おいしい", 5000);
+                        setAvatarSpeech("ごくごく！", 5000);
                         setMiniscaleLED(0x00FF00, 5000); // LED 緑色
                         triggerImmediatePost = true;
                     } else if (stableWeight > weightBeforeLift + 5.0f) {
@@ -366,6 +367,11 @@ void handleWeightUpdate() {
                         setAvatarExpression(Expression::Happy, 5000);
                         setAvatarSpeech("ありがとう！", 5000);
                         setMiniscaleLED(0x0000FF, 5000); // LED 青色
+                    } else {
+                        // 変化なし（ただ戻された）
+                        Serial.println("変化なし（ただ戻された）");
+                        setAvatarExpression(Expression::Neutral, 2000);
+                        setAvatarSpeech("おかえり！", 2000);
                     }
                     weightBeforeLift = 0.0f; // バッファクリア
                 }
@@ -378,6 +384,11 @@ void handleWeightUpdate() {
                 currentState = STATE_DRINKING;
                 weightBeforeLift = stableWeight;
                 Serial.printf("[State] Cup Lifted. Pre-lift weight: %.1f g\n", weightBeforeLift);
+                
+                // 持ち上げ時のフィードバックを追加（反応をわかりやすくするため）
+                setAvatarExpression(Expression::Doubt, 4000);
+                setAvatarSpeech("のむのかな？", 4000);
+                setMiniscaleLED(0xFFFF00, 4000); // 黄色LED点灯
             } else if (isStable) {
                 // コップを置いたまま、ストロー等で飲まれた場合（重量減少）
                 if (currentStableWeight < stableWeight - 5.0f) {
@@ -416,7 +427,7 @@ void handleWeightUpdate() {
                         Serial.printf("補給検知(持ち上げ帰還): %.1f ml (累計: %.1f ml)\n", consumed, consumedMl);
                         
                         setAvatarExpression(Expression::Happy, 5000);
-                        setAvatarSpeech("ごくごく！おいしい", 5000);
+                        setAvatarSpeech("ごくごく！", 5000);
                         setMiniscaleLED(0x00FF00, 5000);
                         triggerImmediatePost = true;
                     } else if (stableWeight > weightBeforeLift + 5.0f) {
@@ -424,12 +435,18 @@ void handleWeightUpdate() {
                         setAvatarExpression(Expression::Happy, 5000);
                         setAvatarSpeech("おかわりだ！", 5000);
                         setMiniscaleLED(0x0000FF, 5000);
+                    } else {
+                        // 変化なし（ただ戻された）
+                        Serial.println("変化なし（ただ戻された）");
+                        setAvatarExpression(Expression::Neutral, 2000);
+                        setAvatarSpeech("おかえり！", 2000);
                     }
                     weightBeforeLift = 0.0f;
                 }
             } else if (!cupPresent && isStable) {
                 // コップがない状態が継続しているため EMPTY に移行
                 currentState = STATE_EMPTY;
+                stableWeight = 0.0f; // 安定重量をリセット
                 Serial.println("[State] Scale is Empty.");
             }
             break;
@@ -448,8 +465,8 @@ void handleEnvUpdate() {
     }
     
     // 簡易暑さ指数（WBGT）の算出式
-    // WBGT_simple = 0.725 * T + 0.0368 * H + 0.00552 * (T * H) - 0.08
-    currentWbgt = 0.725f * currentTemp + 0.0368f * currentHumi + 0.00552f * (currentTemp * currentHumi) - 0.08f;
+    // WBGT_simple = 0.725 * T + 0.0368 * H + 0.00364 * (T * H) - 3.246
+    currentWbgt = 0.725f * currentTemp + 0.0368f * currentHumi + 0.00364f * (currentTemp * currentHumi) - 3.246f;
     
     Serial.printf("Temp: %.1f C, Humi: %.1f %%, Press: %.1f hPa, WBGT: %.1f\n", 
                   currentTemp, currentHumi, currentPress, currentWbgt);
@@ -458,7 +475,7 @@ void handleEnvUpdate() {
     if (currentWbgt >= 28.0f) {
         defaultExpression = Expression::Sad;
         setAvatarExpression(Expression::Sad);
-        setAvatarSpeech("あついよ…お水のも？");
+        setAvatarSpeech("お水飲もう！");
     } else {
         defaultExpression = Expression::Neutral;
         // 表情タイマーが作動していなければ通常顔に戻す
@@ -489,11 +506,16 @@ void sendDataToEnebular() {
         http.addHeader("x-api-key", enebularApiKey);
     }
     
+    float currentWeight = scales.getWeight();
+    if (currentWeight < 0.0f) {
+        currentWeight = 0.0f;
+    }
+    
     // JSON ペイロード構築
     char jsonPayload[256];
     snprintf(jsonPayload, sizeof(jsonPayload),
              "{\"weight_g\":%.1f,\"consumed_ml\":%.1f,\"temp_c\":%.1f,\"humi_pct\":%.1f,\"press_hpa\":%.1f}",
-             stableWeight, consumedMl, currentTemp, currentHumi, currentPress);
+             currentWeight, consumedMl, currentTemp, currentHumi, currentPress);
              
     Serial.print("Sending Payload: ");
     Serial.println(jsonPayload);
@@ -554,6 +576,8 @@ void setup() {
     // 2系統の I2C バス初期化
     // 系統1: 標準 Grove ポート用（計量ユニット）
     scales.begin(&Wire, G2, G1, 0x26);
+    delay(100);
+    scales.setOffset(); // 起動時に自動風袋引き（ゼロ点合わせ）を行う
     
     // 系統2: ATOMIC ToUnit Base 経由の ENV Ⅲ 用 (SDA=GPIO 5, SCL=GPIO 6)
     Wire1.begin(G5, G6, 400000U);

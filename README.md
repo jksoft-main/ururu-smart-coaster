@@ -1,2 +1,2 @@
-# ururu-smart-coaster
-コップを置くだけ！M5Atom S3の可愛いスマートコースター。温湿度や気圧、スマホのBLEで在席を検知し、AI（Gemini）が熱中症や気象病リスクに合わせたアドバイスをLINEで優しく届けます！
+# komame-chan-smart-coaster
+コップを置くだけ！M5AtomS3の可愛いコースター「こまめちゃん」。温湿度や気圧を感知し、熱中症や気象病を防ぐ「こまめな水分補給」をAI（Gemini）がLINEで優しく促します！

@@ -102,7 +102,7 @@ enebular上のNode-REDは、「HTTP In」ノードまたは「LCDPin」ノード
 ### 4.1 熱中症暑さ指数（簡易WBGT）の自律算出
 湿度気圧センサユニットから受信した温度 T （℃）および湿度 H （%）に基づき、functionノード内で簡易暑さ指数を自律計算する
 
-$$\text{WBGT}_{\text{simple}} = 0.725T + 0.0368H + 0.00552(T \times H) - 0.08$$
+$$\text{WBGT}_{\text{simple}} = 0.725T + 0.0368H + 0.00364(T \times H) - 3.246$$
 
 ### 4.2 気圧低下（気象病トリガー）の監視
 1回前の受信データ（またはデータストアに格納された直近3時間の気圧データ平均値）$P_{\text{past}}$ と、現在の気圧 $P_{\text{now}}$ を比較し、変化量 $\Delta P = P_{\text{now}} - P_{\text{past}}$ を算出する。
