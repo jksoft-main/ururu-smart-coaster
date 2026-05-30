@@ -620,7 +620,7 @@ exports.handler = async (event) => {
         }
 
         // 9. Write drink notification marker to datastore to prevent repeated notifications within 30 minutes
-        if (didDrink && tableId) {
+        if (shouldSendDrinkNotification && tableId) {
           try {
             await datastore.putItem({
               tableId: tableId,
