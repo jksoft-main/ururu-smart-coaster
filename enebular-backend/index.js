@@ -59,7 +59,7 @@ exports.handler = async (event) => {
         console.log(`Received message from user: "${userText}"`);
 
         // Check for inquiry keywords (environment, temperature, etc.) to trigger response
-        const keywords = ["環境", "状態", "部屋", "温度", "湿度", "気圧", "wbgt", "熱中症", "調子", "元気", "ステータス", "天気", "暑い", "寒い", "こmadaよ", "こまだよ", "こまめ"];
+        const keywords = ["環境", "状態", "部屋", "温度", "室温", "湿度", "気圧", "wbgt", "熱中症", "調子", "元気", "ステータス", "天気", "暑い", "寒い", "こmadaよ", "こまだよ", "こまめ"];
         const matched = keywords.some(kw => userText.includes(kw));
 
         if (!matched) {
