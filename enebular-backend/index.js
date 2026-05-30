@@ -10,23 +10,7 @@ const datastore = new CloudDataStoreClient();
 exports.handler = async (event) => {
   console.log("Received event:", JSON.stringify(event, null, 2));
 
-  // 1. API Key Authentication (Optional security verification)
-  const expectedApiKey = process.env.DEVICE_API_KEY;
-  if (expectedApiKey) {
-    const headers = event.headers || {};
-    // Extract x-api-key header in a case-insensitive manner
-    const apiKey = headers["x-api-key"] || headers["X-Api-Key"];
-    if (apiKey !== expectedApiKey) {
-      console.warn("Authentication failed: API key mismatch.");
-      return {
-        statusCode: 401,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "Unauthorized" }),
-      };
-    }
-  }
-
-  // 2. Parse request payload
+  // 1. Parse request payload first to inspect the request source
   let body = event.body;
   if (typeof body === "string") {
     try {
@@ -39,6 +23,188 @@ exports.handler = async (event) => {
         body: JSON.stringify({ error: "Invalid JSON body" }),
       };
     }
+  }
+
+  // Detect if this is a LINE Webhook event (contains a destination and events array)
+  const isLineWebhook = body && Array.isArray(body.events);
+
+  if (!isLineWebhook) {
+    // 2. API Key Authentication (Optional security verification for smart coaster device uploads)
+    const expectedApiKey = process.env.DEVICE_API_KEY;
+    if (expectedApiKey) {
+      const headers = event.headers || {};
+      // Extract x-api-key header in a case-insensitive manner
+      const apiKey = headers["x-api-key"] || headers["X-Api-Key"];
+      if (apiKey !== expectedApiKey) {
+        console.warn("Authentication failed: API key mismatch.");
+        return {
+          statusCode: 401,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ error: "Unauthorized" }),
+        };
+      }
+    }
+  }
+
+  // 3. Handle LINE Webhook events (User querying "こまめちゃん" chatbot)
+  if (isLineWebhook) {
+    const lineToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const tableId = process.env.TABLE_ID;
+
+    for (const lineEvent of body.events) {
+      if (lineEvent.type === "message" && lineEvent.message && lineEvent.message.type === "text") {
+        const replyToken = lineEvent.replyToken;
+        const userText = lineEvent.message.text.trim();
+        console.log(`Received message from user: "${userText}"`);
+
+        // Check for inquiry keywords (environment, temperature, etc.) to trigger response
+        const keywords = ["環境", "状態", "部屋", "温度", "湿度", "気圧", "wbgt", "熱中症", "調子", "元気", "ステータス", "天気", "暑い", "寒い", "こmadaよ", "こまだよ", "こまめ"];
+        const matched = keywords.some(kw => userText.includes(kw));
+
+        if (!matched) {
+          console.log("No keywords matched. Skipping reply.");
+          continue;
+        }
+
+        // Query the datastore for the latest room status record
+        let latestRecord = null;
+        if (tableId) {
+          try {
+            const queryResult = await datastore.query({
+              tableId: tableId,
+              expression: "#deviceId = :deviceId",
+              values: { deviceId: "komame-coaster" },
+              order: false, // Descending order (latest first)
+              limit: 10,
+            });
+
+            const items =
+              (queryResult && queryResult.params && queryResult.params.Items) ||
+              (queryResult && queryResult.Items) ||
+              [];
+
+            for (const item of items) {
+              if (item.press_hpa !== undefined) {
+                latestRecord = item;
+                break;
+              }
+            }
+          } catch (err) {
+            console.error("Failed to query datastore for LINE reply:", err);
+          }
+        }
+
+        let replyText = "";
+        if (latestRecord) {
+          const currentTemp = latestRecord.temp_c;
+          const currentHumi = latestRecord.humi_pct;
+          const currentPress = latestRecord.press_hpa;
+          const currentWbgt = latestRecord.wbgt;
+          const currentDP = latestRecord.dP;
+          const currentWeight = latestRecord.weight_g;
+          const isCupPresent = currentWeight > 15.0;
+
+          if (geminiApiKey) {
+            try {
+              const systemPrompt = `あなたはM5Atom S3のスマートコースターに宿っている、お水飲み見守りキャラクターの「こまめちゃん」です。
+ユーザーを大切に想う、少しお節介で人懐っこい口調（語尾に「〜だよ」「〜ね！」を使用）で語りかけてください。
+
+現在のお部屋のコンテキスト：
+- 室温: ${currentTemp.toFixed(1)} ℃
+- 湿度: ${currentHumi.toFixed(0)} %
+- 気圧: ${currentPress.toFixed(1)} hPa (直近の変化: ${currentDP.toFixed(1)} hPa)
+- 簡易暑さ指数(WBGT): ${currentWbgt.toFixed(1)} (28以上は熱中症危険)
+- コースターの状態: ${isCupPresent ? `コップが置いてあるよ（重さ: ${currentWeight.toFixed(0)}g）` : "コップは置いてないみたい"}
+
+ユーザーからのメッセージ: "${userText}"
+
+【命令・ルール】
+1. ユーザーからのメッセージに対して、現在のお部屋の環境コンテキストを踏まえて優しく回答してください。
+2. もし暑さ指数（WBGT）が高い場合や、気圧が急激に下がっている場合は、水分補給を優しく促したり体調を気遣ってください。
+3. LINE用のチャットメッセージとして150文字以内で作成してください。`;
+
+              const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
+              const geminiResponse = await fetch(geminiUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  system_instruction: {
+                    parts: [{ text: systemPrompt }],
+                  },
+                  contents: [
+                    {
+                      role: "user",
+                      parts: [{ text: "状況を教えて！" }],
+                    },
+                  ],
+                }),
+              });
+
+              if (geminiResponse.ok) {
+                const geminiData = await geminiResponse.json();
+                const textMessage =
+                  geminiData.candidates &&
+                  geminiData.candidates[0] &&
+                  geminiData.candidates[0].content &&
+                  geminiData.candidates[0].content.parts &&
+                  geminiData.candidates[0].content.parts[0] &&
+                  geminiData.candidates[0].content.parts[0].text;
+
+                if (textMessage) {
+                  replyText = textMessage.trim();
+                  console.log("Gemini generated chatbot reply:", replyText);
+                }
+              }
+            } catch (geminiErr) {
+              console.error("Gemini failed for LINE reply, falling back to static:", geminiErr);
+            }
+          }
+
+          if (!replyText) {
+            replyText = `こまだよ！今のお部屋は、気温: ${currentTemp.toFixed(1)}℃、湿度: ${currentHumi.toFixed(0)}%、気圧: ${currentPress.toFixed(1)}hPaだよ！水分補給をこまめにしようね！`;
+          }
+        } else {
+          replyText = "こまだよ！まだコースターのデータが見つからないみたい。電源が入っているか確認してね！";
+        }
+
+        if (lineToken) {
+          try {
+            const lineUrl = "https://api.line.me/v2/bot/message/reply";
+            const lineResponse = await fetch(lineUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${lineToken}`,
+              },
+              body: JSON.stringify({
+                replyToken: replyToken,
+                messages: [
+                  {
+                    type: "text",
+                    text: replyText,
+                  },
+                ],
+              }),
+            });
+
+            if (!lineResponse.ok) {
+              console.error(`Failed to send LINE reply: ${await lineResponse.text()}`);
+            } else {
+              console.log("LINE reply sent successfully.");
+            }
+          } catch (lineErr) {
+            console.error("Failed to send LINE reply:", lineErr);
+          }
+        }
+      }
+    }
+
+    return {
+      statusCode: 200,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Webhook processed" }),
+    };
   }
 
   // Support both JSON Array and single JSON Object (convert single to Array)
@@ -80,10 +246,27 @@ exports.handler = async (event) => {
   });
 
   // 3. Retrieve recent records from enebular Datastore for pressure + hydration reminder
+  const baseTime = Date.now();
+  const firstRecordOffset = records[0] && records[0].offset_sec !== undefined ? records[0].offset_sec : 0;
+  const firstRecordTimestamp = baseTime - (firstRecordOffset * 1000);
+
   let lastPressure = null;
   let lastDrinkTime = null;
   let reminderAlreadySent = false;
   let lastDrinkNotificationTime = null;
+  let sessionStartTime = firstRecordTimestamp; // Default to oldest current record timestamp if no history
+  let boundaryFound = false;
+
+  // Calculate the total consumed volume in the current batch
+  let currentBatchConsumed = 0;
+  for (const rec of records) {
+    if (rec.consumed_ml > 0) {
+      currentBatchConsumed += rec.consumed_ml;
+    }
+  }
+  // Initialize the cumulative consumed volume since the last notification
+  let consumedSinceLastNotification = currentBatchConsumed;
+
   const tableId = process.env.TABLE_ID;
   const REMINDER_THRESHOLD_MS = 60 * 60 * 1000; // 60 minutes
   const DRINK_NOTIFICATION_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
@@ -117,11 +300,38 @@ exports.handler = async (event) => {
 
         // Scan recent records (newest first)
         let foundDrinkOrReminder = false;
-        for (const item of items) {
+        let lastRecordTime = baseTime;
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+
+          // Determine session start time (going backwards in time)
+          // Find if there is a gap > 60 minutes or if the cup was absent (weight <= 15g)
+          if (item.timestamp !== undefined) {
+            const gap = lastRecordTime - item.timestamp;
+            // Only check isCupAbsent if the record is a sensor reading (i.e. weight_g is defined).
+            // This prevents marker records (which don't contain weight_g) from being falsely detected as session boundaries.
+            const isCupAbsent = item.weight_g !== undefined && item.weight_g <= 15.0;
+            if (gap >= REMINDER_THRESHOLD_MS || isCupAbsent) {
+              // The session started right after this record (which is the previous item in the descending array).
+              // If there is no previous item in items (i.e. i === 0), it means the session started with the current batch.
+              sessionStartTime = (i > 0 && items[i - 1]) ? items[i - 1].timestamp : firstRecordTimestamp;
+              console.log(`Session start detected (due to gap or absent cup) at timestamp: ${new Date(sessionStartTime).toISOString()}`);
+              boundaryFound = true;
+              break; // Stop scanning since we reached the session boundary
+            }
+            lastRecordTime = item.timestamp;
+          }
+
           // Find the most recent drink notification timestamp
           if (item.drink_notification_sent && lastDrinkNotificationTime === null) {
             lastDrinkNotificationTime = item.timestamp;
             console.log(`Last drink notification detected at timestamp: ${new Date(lastDrinkNotificationTime).toISOString()}`);
+          }
+
+          // Accumulate consumed volume since the last notification (only if we haven't found the notification marker yet)
+          if (lastDrinkNotificationTime === null && item.consumed_ml > 0) {
+            consumedSinceLastNotification += item.consumed_ml;
+            console.log(`Accumulated past drink since last notification: ${item.consumed_ml} ml. Total now: ${consumedSinceLastNotification} ml`);
           }
 
           // Scan for last drink time and reminder marker
@@ -138,6 +348,14 @@ exports.handler = async (event) => {
             }
           }
         }
+
+        // If we ran through all items without finding a gap or cup absence,
+        // the session started at the oldest record in the list
+        if (!boundaryFound && items.length > 0) {
+          const oldestItem = items[items.length - 1];
+          sessionStartTime = oldestItem.timestamp || firstRecordTimestamp;
+          console.log(`Session start defaulted to oldest item timestamp: ${new Date(sessionStartTime).toISOString()}`);
+        }
       } else {
         console.log("No previous records found in Datastore. Setting initial Delta P = 0.0 hPa");
       }
@@ -149,7 +367,6 @@ exports.handler = async (event) => {
   }
 
   // 4. Process each record sequentially (chronological order)
-  const baseTime = Date.now();
   const processedRecords = [];
 
   for (const rec of records) {
@@ -227,6 +444,10 @@ exports.handler = async (event) => {
   const currentWbgt = latestRecord.wbgt !== undefined ? latestRecord.wbgt : maxWbgt;
   const currentDP = latestRecord.dP !== undefined ? latestRecord.dP : minDP;
 
+  // Check if the cup is present on the coaster (weight > 15g)
+  const isCupPresent = latestRecord.weight_g !== undefined && latestRecord.weight_g > 15.0;
+  console.log(`Cup presence check: ${isCupPresent} (latest weight: ${latestRecord.weight_g} g)`);
+
   // Rate-limiting for drink notifications (at most once every 30 minutes)
   let shouldSendDrinkNotification = false;
   if (didDrink) {
@@ -248,17 +469,20 @@ exports.handler = async (event) => {
     reminderAlreadySent = false;
     console.log("User drank in this batch. Reminder state cleared.");
   } else if (!reminderAlreadySent) {
-    // Check if it's been 60+ minutes since last drink (or no drink record exists at all)
+    // Check if it's been 60+ minutes since last drink (or since session started if they haven't drunk yet)
     const now = Date.now();
-    if (lastDrinkTime === null || (now - lastDrinkTime) >= REMINDER_THRESHOLD_MS) {
+    const baselineTime = lastDrinkTime !== null ? lastDrinkTime : sessionStartTime;
+    if (now - baselineTime >= REMINDER_THRESHOLD_MS) {
       needsReminder = true;
-      console.log(`Hydration reminder triggered. Last drink: ${lastDrinkTime ? new Date(lastDrinkTime).toISOString() : "never"}, elapsed: ${lastDrinkTime ? Math.round((now - lastDrinkTime) / 60000) : "∞"} min`);
+      console.log(`Hydration reminder triggered. Baseline time: ${new Date(baselineTime).toISOString()}, elapsed: ${Math.round((now - baselineTime) / 60000)} min`);
+    } else {
+      console.log(`Reminder not needed yet. Baseline time: ${new Date(baselineTime).toISOString()}, elapsed: ${Math.round((now - baselineTime) / 60000)} min`);
     }
   } else {
     console.log("Reminder already sent. Skipping until user drinks.");
   }
 
-  if (isHeatRisk || isPressureDrop || shouldSendDrinkNotification || needsReminder) {
+  if (isCupPresent && (isHeatRisk || isPressureDrop || shouldSendDrinkNotification || needsReminder)) {
     const lineToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
     const lineUserId = process.env.LINE_USER_ID;
     const geminiApiKey = process.env.GEMINI_API_KEY;
@@ -272,7 +496,7 @@ exports.handler = async (event) => {
 現在のお部屋のコンテキストを分析してください：
 - 最新の簡易暑さ指数(WBGT): ${currentWbgt.toFixed(1)} (28以上は熱中症危険)
 - 直近の気圧変化量 (最小値): ${currentDP.toFixed(1)} hPa (マイナス1.5hPa以下の低下は気象病・低気圧頭痛に警戒)
-- 今回の水分補給検知: ${didDrink ? `あり（合計補給量: ${totalConsumed.toFixed(1)} ml）` : "なし（お水は飲んでいません）"}
+- 今回の水分補給検知: ${didDrink ? `あり（合計補給量: ${consumedSinceLastNotification.toFixed(1)} ml）` : "なし（お水は飲んでいません）"}
 - 水分補給リマインド: ${needsReminder ? "1時間以上お水を飲んでいません！優しくお水を飲むよう促してください。" : "リマインド不要"}
 
 【命令・ルール】
@@ -341,7 +565,7 @@ exports.handler = async (event) => {
             alerts.push(`気圧が急に下がったよ（気圧変化: ${currentDP.toFixed(1)} hPa）。頭痛に気をつけて、ノンカフェインのドリンクをこまめにちびちび飲んでね！`);
           }
           if (didDrink) {
-            alerts.push(`お水を ${totalConsumed.toFixed(0)} ml 飲んだね！偉い偉い！`);
+            alerts.push(`お水を ${consumedSinceLastNotification.toFixed(0)} ml 飲んだね！偉い偉い！`);
           }
           if (needsReminder) {
             alerts.push(`1時間以上お水飲んでないよ！こまめに水分補給しようね！`);
@@ -427,7 +651,7 @@ exports.handler = async (event) => {
       message: `Successfully processed ${processedRecords.length} records`,
       latestWbgt: parseFloat(currentWbgt.toFixed(2)),
       latestDP: parseFloat(currentDP.toFixed(2)),
-      totalConsumed: parseFloat(totalConsumed.toFixed(2)),
+      totalConsumed: parseFloat(consumedSinceLastNotification.toFixed(2)),
     }),
   };
 };

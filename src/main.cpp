@@ -14,6 +14,7 @@
 #define ENEBULAR_ENDPOINT "クラウド実行環境のURLを設定"
 const char* AP_SSID = "Komame-Setup";
 const float EMPTY_WEIGHT_THRESHOLD = 15.0f; // コップ有無判定の閾値（g）
+const float DRINK_WEIGHT_THRESHOLD = 10.0f; // 水分補給・注ぎ足し検知のしきい値（g）
 const unsigned long WEIGHT_SAMPLE_INTERVAL = 200; // 重量サンプリング間隔 (ms)
 const unsigned long ENV_SAMPLE_INTERVAL = 5000;    // 環境データサンプリング間隔 (ms)
 const unsigned long HTTP_POST_INTERVAL = 600000;    // HTTPS POST送信周期 (10分 = 600000ms)
@@ -366,7 +367,7 @@ void handleWeightUpdate() {
                 
                 // コップが戻ってきたとき（DRINKINGからの遷移）の水分摂取検知
                 if (weightBeforeLift > EMPTY_WEIGHT_THRESHOLD) {
-                    if (stableWeight < weightBeforeLift - 5.0f) {
+                    if (stableWeight < weightBeforeLift - DRINK_WEIGHT_THRESHOLD) {
                         // 水分補給が行われた
                         float consumed = weightBeforeLift - stableWeight;
                         consumedMl += consumed;
@@ -377,7 +378,7 @@ void handleWeightUpdate() {
                         setAvatarSpeech("ごくごく！", 5000);
                         setMiniscaleLED(0x00FF00, 5000); // LED 緑色
                         triggerImmediatePost = true;
-                    } else if (stableWeight > weightBeforeLift + 5.0f) {
+                    } else if (stableWeight > weightBeforeLift + DRINK_WEIGHT_THRESHOLD) {
                         // コップに飲料が注ぎ足された（おかわり）
                         Serial.printf("注ぎ足し検知: %.1f g\n", stableWeight);
                         setAvatarExpression(Expression::Happy, 5000);
@@ -407,7 +408,7 @@ void handleWeightUpdate() {
                 setMiniscaleLED(0xFFFF00, 4000); // 黄色LED点灯
             } else if (isStable) {
                 // コップを置いたまま、ストロー等で飲まれた場合（重量減少）
-                if (currentStableWeight < stableWeight - 5.0f) {
+                if (currentStableWeight < stableWeight - DRINK_WEIGHT_THRESHOLD) {
                     float consumed = stableWeight - currentStableWeight;
                     consumedMl += consumed;
                     sampleConsumedMl += consumed;
@@ -420,7 +421,7 @@ void handleWeightUpdate() {
                     triggerImmediatePost = true;
                 } 
                 // 置いたまま注ぎ足された場合
-                else if (currentStableWeight > stableWeight + 5.0f) {
+                else if (currentStableWeight > stableWeight + DRINK_WEIGHT_THRESHOLD) {
                     Serial.printf("注ぎ足し検知(静置): %.1f g\n", currentStableWeight);
                     stableWeight = currentStableWeight;
                     setAvatarExpression(Expression::Happy, 5000);
@@ -438,7 +439,7 @@ void handleWeightUpdate() {
                 Serial.printf("[State] Cup Returned. Weight: %.1f g\n", stableWeight);
                 
                 if (weightBeforeLift > EMPTY_WEIGHT_THRESHOLD) {
-                    if (stableWeight < weightBeforeLift - 5.0f) {
+                    if (stableWeight < weightBeforeLift - DRINK_WEIGHT_THRESHOLD) {
                         float consumed = weightBeforeLift - stableWeight;
                         consumedMl += consumed;
                         sampleConsumedMl += consumed;
@@ -448,7 +449,7 @@ void handleWeightUpdate() {
                         setAvatarSpeech("ごくごく！", 5000);
                         setMiniscaleLED(0x00FF00, 5000);
                         triggerImmediatePost = true;
-                    } else if (stableWeight > weightBeforeLift + 5.0f) {
+                    } else if (stableWeight > weightBeforeLift + DRINK_WEIGHT_THRESHOLD) {
                         Serial.printf("注ぎ足し検知(帰還): %.1f g\n", stableWeight);
                         setAvatarExpression(Expression::Happy, 5000);
                         setAvatarSpeech("おかわりだ！", 5000);
