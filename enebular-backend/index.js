@@ -162,7 +162,7 @@ exports.handler = async (event) => {
           }
 
           if (!replyText) {
-            replyText = `こまめだよ！今のお部屋は、気温: ${currentTemp.toFixed(1)}℃、湿度: ${currentHumi.toFixed(0)}%、気圧: ${currentPress.toFixed(1)}hPaだよ！水分補給をこまめにしようね！`;
+            replyText = "こまめちゃんはおやすみ中です。しばらく経ったら起きるよ";
           }
         } else {
           replyText = "こまめだよ！まだコースターのデータが見つからないみたい。電源が入っているか確認してね！";
